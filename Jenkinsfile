@@ -9,7 +9,7 @@ node {
 
     stage('Api Call') {
         if (ProxyConfiguration.load() == null){
-            echo 'no proxy configuration'
+            echo 'no proxy configurati'
         }else {
            httpRequest 'https://www.google.cm'
         }
