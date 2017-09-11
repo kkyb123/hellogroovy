@@ -1,0 +1,172 @@
+def HTTP_PROXY = 'http://.com:8099'
+def NO_PROXY = '169.254.169.254'
+def TIMESTAMP = new Date().format('yyyyMMddHHmss')
+
+node {
+    withEnv([
+        "HTTP_PROXY=${HTTP_PROXY}",
+        "HTTPS_PROXY=${HTTP_PROXY}",
+        "NO_PROXY=${NO_PROXY}",
+        "region=${region}",
+        "TIMESTAMP=${TIMESTAMP}",    ]) {
+      AWS_PROFILE = sh (
+        script: 'curl 169.254.169.254/latest/meta-data/iam/security-credentials/',
+        returnStdout: true
+      ).trim()
+      echo "Name of the IAM role attached: ${AWS_PROFILE}"
+      IPv4 = sh (
+        script: 'curl 169.254.169.254/latest/meta-data/local-ipv4/',
+        returnStdout: true
+      ).trim()
+      echo "IP address: ${IPv4}"
+    stage ('Gate 0: Checkout Code') {
+        //checkout scm
+       // echo "Change Target: ${BRANCH_NAME}"
+       checkout scm
+       sh '''
+       git pull https://github.com/gnn451/Test.git newfeature
+       git merge newfeature
+       git push origin Qa_integration
+       '''
+      } //stage 0
+    stage('Post Gate0: Succes or Failure '){
+         //Notify via SNS, EMAIL & Slack
+        echo "Name of the IAM role attached: ${AWS_PROFILE}";
+        echo "Name of the IAM role attached: ${IPv4}";
+      }
+
+    stage ('Gates 1 + 2: Version Control and Branching Strategy') {
+                git url: "https://github.com/MonitoringIntelligence/Artemis.git"
+                env.GIT_COMMIT = sh (
+                  script: "git rev-parse HEAD",
+                  returnStdout: true
+                ).trim()
+                env.GIT_AUTHOR = sh (
+                  script: "git --no-pager show -s --format='%an <%ae>' ${GIT_COMMIT}",
+                  returnStdout: true
+                ).trim()
+                env.GIT_MSG = sh (
+                  script: "git log --pretty=%s -1",
+                  returnStdout: true
+                ).trim()
+                echo "HTTP_PROXY is: ${HTTP_PROXY}";
+                echo "HTTPS_PROXY is: ${HTTPS_PROXY}";
+                echo "NO_PROXY is: ${NO_PROXY}"
+                echo "This executor's name is: ${NODE_NAME}"
+                echo "This executor's IP address is: ${IPv4}"
+                echo "This executor's IAM Profile is: ${AWS_PROFILE}"
+               // echo "The target Git branch is: https://github.com/MonitoringIntelligence/Artemis/tree/${BRANCH_NAME}"
+                //echo "The commit that triggered this build is: https://github.com/MonitoringIntelligence/Artemis/commit/${GIT_COMMIT} - ${GIT_MSG}"
+                // echo "The last successfully built commit is: ${GIT_LAST_SUCCESSFUL_COMMIT} on build: ${GIT_LAST_SUCCESSFUL_BUILD}"
+                // echo "The files changed between the last successful commit and the current commit are: ${GIT_DIFF}"
+                echo "This commit was authored by: ${GIT_AUTHOR}"
+                echo "The AWS IAM Profile in use by this executor is: ${AWS_PROFILE}"
+                echo 'Printing executor environment...'
+                sh 'printenv | sort'
+
+      } //stage 1+2
+
+
+
+    stage('Gate3: Code Coverage'){
+    //get the api callback Url from the Ertocode
+
+    }
+    stage('Gate 4+5+6:  Eratocode'){
+    sh '''
+    export status=
+    wget https://github.com/MonitoringIntelligence/Artemis/archive/master.zip
+    mv master.zip artemis.zip
+    curl -L -v \
+      -F "componentName=artemis" \
+      -F "codeArchive=@./artemis.zip; type=application/zip;" \
+    https://appsec.com/api/v1/assessment/static --insecure --proxy http://.com:8099
+    sleep 200
+    '''
+    }
+    stage('Post Gate 4+5+6: Succes or Failure '){
+    sh '''
+
+        wget -O - -q -t 1 https://appsec.com/api/comp/artemis/results?includeClosed=false > status.json
+
+        function readJson {
+          UNAMESTR=`uname`
+          if [[ "$UNAMESTR" == 'Linux' ]]; then
+            SED_EXTENDED='-r'
+          elif [[ "$UNAMESTR" == 'Darwin' ]]; then
+            SED_EXTENDED='-E'
+          fi;
+
+          VALUE=`grep -m 1 "\"${2}\"" ${1} | sed ${SED_EXTENDED} 's/^ *//;s/.*: *"//;s/",?//'`
+
+          if [ ! "$VALUE" ]; then
+            echo "Error: Cannot find \"${2}\" in ${1}" >&2;
+            exit 1;
+          else
+            echo $VALUE ;
+          fi;
+        }
+        CODE=`readJson status.json code` || exit 1;
+        MESSAGE=`readJson status.json message` || exit 2;
+        SCORE=`readJson status.json score` || exit 3;
+        COUNT=`readJson status.json count` || exit 4;
+        DATA=`readJson status.json data` || exit 5;
+
+        echo "$SCORE"
+        echo "$CODE"
+    '''
+             //Notify via SNS, EMAIL & Slack
+    }
+    stages{
+
+    }
+    stage('Gate8: Auto Provision to any region'){
+        echo "$region"
+        //get the api callback Url from the Ertocode
+
+    }
+    stage('Gate14: Automated CO---> Make 3 API calls to Artemis notifying validation results '){
+
+        sh '''
+         cat << _EOF_
+         {"lob":"RETAILBANK",
+         "impactedSystem":"${APPLICATION_BAP}",
+         "eid":"${CO_CREATOR_EID}",
+         "buildNumber":"${BUILD_NUMBER}",
+         "buildJobUrl":"https://bankjenkins.com:443/job/$APPLICATION_FOLDER/job/master-pr-artemis-callback/buildWithParameters?PIPELINE_VERSION=${PIPELINE_VERSION}"}
+         _EOF_
+
+         curl -kv -u ${ARTEMIS_USER}:${ARTEMIS_PASSWORD} \
+         --data @co-data.json \
+         --header "Content-Type: application/json" \
+         --header "Accept: application/json" \
+         ${ARTEMIS_API_ENDPOINT}${ARTEMIS_CREATE_CO_PATH}  > artemis_result.json
+
+         cat artemis_result.json
+
+         export ARTEMIS_REF_NUMBER=`cat artemis_result.json | sed -n 's/.*"referenceNumber"[ ]*:[ ]*"\([^"]*\)"}/\1/p'`
+
+         touch artemis-${PIPELINE_VERSION}.properties
+         cat << _EOF_ | tee artemis-${PIPELINE_VERSION}.properties
+         PIPELINE_VERSION=${PIPELINE_VERSION}
+         sha1=${sha1}
+         ghprbActualCommit=${ghprbActualCommit}
+         ghprbPullId=${ghprbPullId}
+         ghprbCredentialsId=${ghprbCredentialsId}
+         ghprbGhRepository=${ghprbGhRepository}
+         ARTEMIS_REF_NUMBER=${ARTEMIS_REF_NUMBER}
+         _EOF_
+         '''
+        echo "$BUILD_NUMBER"
+
+            //get the api callback Url from the Ertocode
+            // wait for the results
+            //if yes trigger rehydration job
+            //if no Notify SNS, Email, SLACK
+    }
+    stage(' Gate12+13: Call back URL to bext pipeline'){
+            //get the api callback Url from the Ertocode
+
+    }
+    }
+    }
