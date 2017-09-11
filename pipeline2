@@ -1,0 +1,68 @@
+def HTTP_PROXY = 'http://.com:8099'
+def NO_PROXY = '169.254.169.254'
+def TIMESTAMP = new Date().format('yyyyMMddHHmss')
+
+node {
+    withEnv([
+        "HTTP_PROXY=${HTTP_PROXY}",
+        "HTTPS_PROXY=${HTTP_PROXY}",
+        "NO_PROXY=${NO_PROXY}",
+        "region=${region}",
+        "TIMESTAMP=${TIMESTAMP}",    ]) {
+      AWS_PROFILE = sh (
+        script: 'curl 169.254.169.254/latest/meta-data/iam/security-credentials/',
+        returnStdout: true
+      ).trim()
+      echo "Name of the IAM role attached: ${AWS_PROFILE}"
+      IPv4 = sh (
+        script: 'curl 169.254.169.254/latest/meta-data/local-ipv4/',
+        returnStdout: true
+      ).trim()
+      echo "IP address: ${IPv4}"
+    stage ('Gate 0: Checkout Code') {
+        //checkout scm
+       // echo "Change Target: ${BRANCH_NAME}"
+       checkout scm
+       sh '''
+       git pull https://github.kdc.com/gnn451/Test.git newfeature
+       git merge newfeature
+       git push origin Qa_integration
+       '''
+      } //stage 0
+    stage('Post Gate0: start rehydration script '){
+         //Notify via SNS, EMAIL & Slack
+        echo "Name of the IAM role attached: ${AWS_PROFILE}";
+        echo "Name of the IAM role attached: ${IPv4}";
+      }
+
+    stage ('Gates 1 + 2: start Hercules test') {
+    sh '''
+                curl -X POST -H "Content-Type: application/json" -H "Cache-Control: no-cache" -d   '{"testID":"5834b5676dd892000123b54b","testName":"Artemis Stress","poolID":"5818baa1e4b0c84637ce36b4","poolName":"twister_cluster","dashboardID":"5834b6386dd8920001ccf1fc","dashboardName":"Artemis - PT"}' "http://hercules.com:8080/runs"
+        '''
+      } //stage 1+2
+
+
+
+    stage('Gate3: call back from  hercules'){
+    //get response
+
+    }
+    stage('if sucess full close CO in Artemis '){
+    sh '''
+    touch close-co-data.json
+    cat << _EOF_ | tee close-co-data.json
+    {
+    "reference" : "${ARTEMIS_REF_NUMBER}",
+    "closureCode" : "${ARTEMIS_DEPLOYMENT_STATUS}",
+    "actualEnd" : "`date +%s`"
+    }
+    _EOF_
+
+    curl -kv -u ${ARTEMIS_USER}:${ARTEMIS_PASSWORD} \
+    --data @close-co-data.json \
+    --header "Content-Type: application/json" \
+    --header "Accept: application/json" \
+    ${ARTEMIS_API_ENDPOINT}${ARTEMIS_CLOSE_CO_PATH}
+    sh '''
+    }
+    }
